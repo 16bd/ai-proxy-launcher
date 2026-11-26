@@ -10,12 +10,17 @@ using System.Windows.Forms;
 
 internal static class LauncherStyle
 {
-    internal static readonly Color Surface = Color.FromArgb(244, 247, 250);
+    // 从 Logo 取绿色主调，按钮用较深的绿保证白字清晰，面板使用浅绿区分层次。
+    internal static readonly Color Surface = Color.FromArgb(243, 248, 245);
+    internal static readonly Color AccentSurface = Color.FromArgb(227, 244, 233);
     internal static readonly Color White = Color.White;
-    internal static readonly Color Text = Color.FromArgb(22, 33, 50);
-    internal static readonly Color Muted = Color.FromArgb(69, 84, 105);
-    internal static readonly Color Blue = Color.FromArgb(29, 78, 161);
-    internal static readonly Color Line = Color.FromArgb(190, 204, 221);
+    internal static readonly Color Text = Color.FromArgb(22, 42, 34);
+    internal static readonly Color Muted = Color.FromArgb(73, 100, 87);
+    internal static readonly Color Accent = Color.FromArgb(8, 114, 69);
+    internal static readonly Color AccentHover = Color.FromArgb(8, 97, 60);
+    internal static readonly Color AccentPressed = Color.FromArgb(6, 79, 50);
+    internal static readonly Color Line = Color.FromArgb(112, 144, 128);
+    internal static readonly Color Disabled = Color.FromArgb(233, 239, 235);
 
     internal static Label Label(string value, float size, bool bold = false)
     {
@@ -46,14 +51,14 @@ internal static class LauncherStyle
 
         Action update = () =>
         {
-            button.BackColor = !button.Enabled ? Color.FromArgb(235, 239, 245) : primary ? Blue : White;
+            button.BackColor = !button.Enabled ? Disabled : primary ? Accent : White;
             button.ForeColor = primary ? White : Text;
-            button.FlatAppearance.BorderColor = primary && button.Enabled ? Blue : Line;
+            button.FlatAppearance.BorderColor = primary && button.Enabled ? Accent : Line;
         };
         update();
         button.EnabledChanged += (sender, args) => update();
-        button.FlatAppearance.MouseOverBackColor = primary ? Color.FromArgb(27, 65, 134) : Surface;
-        button.FlatAppearance.MouseDownBackColor = primary ? Color.FromArgb(22, 56, 112) : Line;
+        button.FlatAppearance.MouseOverBackColor = primary ? AccentHover : Surface;
+        button.FlatAppearance.MouseDownBackColor = primary ? AccentPressed : AccentSurface;
         return button;
     }
 
@@ -93,7 +98,7 @@ internal sealed class LauncherForm : Form
     internal LauncherForm()
     {
         Text = "AI 代理启动器";
-        Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+        Icon = Icon.ExtractAssociatedIcon(typeof(LauncherForm).Assembly.Location);
         Font = new Font("Microsoft YaHei UI", 10);
         AutoScaleMode = AutoScaleMode.Font;
         BackColor = SystemInformation.HighContrast ? SystemColors.Window : LauncherStyle.Surface;
@@ -113,12 +118,28 @@ internal sealed class LauncherForm : Form
         page.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         Controls.Add(page);
 
-        var title = LauncherStyle.Label(Text, 23, true);
-        title.Margin = new Padding(0, 0, 0, 9);
-        page.Controls.Add(title, 0, 0);
+        // 标题和窗口共用 EXE 内的 ICO，Logo 换版时只维护一份图标资源。
+        var header = new TableLayoutPanel
+        {
+            ColumnCount = 2, RowCount = 1, Dock = DockStyle.Fill,
+            Margin = new Padding(0, 0, 0, 9)
+        };
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        Bitmap logoImage = Icon.ToBitmap();
+        var logo = new PictureBox
+        {
+            Image = logoImage, Size = new Size(36, 36),
+            SizeMode = PictureBoxSizeMode.Zoom, Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 0, 12, 0), AccessibleName = "启动器 Logo"
+        };
+        logo.Disposed += (sender, args) => logoImage.Dispose();
+        header.Controls.Add(logo, 0, 0);
+        header.Controls.Add(LauncherStyle.Label(Text, 23, true), 1, 0);
+        page.Controls.Add(header, 0, 0);
 
         var shared = LauncherStyle.Band();
-        shared.BackColor = SystemInformation.HighContrast ? SystemColors.Window : Color.FromArgb(228, 237, 250);
+        shared.BackColor = SystemInformation.HighContrast ? SystemColors.Window : LauncherStyle.AccentSurface;
         shared.Controls.Add(LauncherStyle.Label("共享代理", 10, true), 0, 0);
         shared.Controls.Add(proxyLine, 0, 1);
         test.Click += async (sender, args) => await RunAsync(TestAsync);
