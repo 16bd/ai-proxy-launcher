@@ -28,11 +28,11 @@ internal static class LauncherStyle
         };
     }
 
-    internal static Button Button(string title, bool primary = false)
+    internal static Button Button(string title, bool primary = false, int width = 112)
     {
         var button = new Button
         {
-            Text = title, Size = new Size(112, 40), FlatStyle = FlatStyle.Flat,
+            Text = title, Size = new Size(width, 40), FlatStyle = FlatStyle.Flat,
             Cursor = Cursors.Hand, Anchor = AnchorStyles.Right,
             Margin = new Padding(8, 0, 0, 0), UseVisualStyleBackColor = false
         };
@@ -84,7 +84,11 @@ internal sealed class LauncherForm : Form
     private readonly Label status = LauncherStyle.Label("", 9);
     private readonly Label proxyLine = LauncherStyle.Label("", 10);
     private readonly Button test = LauncherStyle.Button("测试连接");
+    private readonly Button installChinese = LauncherStyle.Button("安装中文", width: 84);
+    private readonly Button restoreEnglish = LauncherStyle.Button("恢复英文", width: 84);
+    private readonly AntigravityLocalization localization = AntigravityLocalization.ForCurrentUser();
     private bool busy;
+    private bool changingLanguage;
 
     internal LauncherForm()
     {
@@ -135,8 +139,24 @@ internal sealed class LauncherForm : Form
             var start = LauncherStyle.Button("启动桌面版", true);
             start.AccessibleName = "启动 " + app.Name + " 桌面版";
             start.Click += async (sender, args) => await RunAsync(() => LaunchAsync(index));
-            row.Controls.Add(start, 1, 0);
-            row.SetRowSpan(start, 2);
+            Control actions = start;
+            if (app.Id == "antigravity")
+            {
+                // 汉化按钮只属于 Antigravity，其他应用沿用原来的桌面启动入口。
+                var group = new FlowLayoutPanel
+                {
+                    AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                    WrapContents = false, Anchor = AnchorStyles.Right, Margin = Padding.Empty
+                };
+                installChinese.Click += async (sender, args) => await RunAsync(() => ChangeLanguageAsync(true));
+                restoreEnglish.Click += async (sender, args) => await RunAsync(() => ChangeLanguageAsync(false));
+                group.Controls.Add(installChinese);
+                group.Controls.Add(restoreEnglish);
+                group.Controls.Add(start);
+                actions = group;
+            }
+            row.Controls.Add(actions, 1, 0);
+            row.SetRowSpan(actions, 2);
             nativeButtons[i] = start;
             page.Controls.Add(row, 0, i + 2);
         }
@@ -164,6 +184,7 @@ internal sealed class LauncherForm : Form
             ? proxy + "  ·  自动识别"
             : busy ? "正在识别代理地址…" : "未找到可用的本地 HTTP 代理";
         test.Enabled = !busy;
+        installChinese.Enabled = restoreEnglish.Enabled = !busy && programs[0] != null;
         for (int i = 0; i < nativeButtons.Length; i++)
         {
             bool found = programs[i] != null;
@@ -226,6 +247,61 @@ internal sealed class LauncherForm : Form
         Array.Copy(checks, results, checks.Length);
         int passed = checks.Count(result => result.Ok);
         status.Text = "连通性测试完成，" + passed + " / " + checks.Length + " 个探测地址可用。";
+    }
+
+    private async Task ChangeLanguageAsync(bool install)
+    {
+        Service app = Service.All[0];
+        string exe = LaunchTarget.FindDesktop(app);
+        if (exe == null)
+        {
+            status.Text = "没有找到 Antigravity 桌面版。";
+            RefreshTargets();
+            return;
+        }
+        if (LaunchTarget.DesktopIsRunning(app, exe))
+        {
+            status.Text = "请彻底退出 Antigravity，再安装中文或恢复英文。";
+            return;
+        }
+        if (!install && !localization.HasRestoreState)
+        {
+            status.Text = "没有找到此电脑的 Antigravity 汉化记录。";
+            return;
+        }
+        // 安装前重新识别代理，代理客户端切换端口时仍能查询版本并正确启动。
+        if ((install || !localization.HasRestorePackage) && !await ResolveProxyAsync())
+            return;
+        status.Text = "正在准备 Antigravity 汉化组件…";
+        var progress = new Progress<string>(message => { if (!IsDisposed) status.Text = message; });
+        string address = proxy;
+        changingLanguage = true;
+        string version;
+        try
+        {
+            version = await Task.Run(() => localization.Apply(exe, address, install, progress));
+        }
+        finally
+        {
+            changingLanguage = false;
+        }
+        if (install)
+        {
+            // 上游组件只处理本地汉化，最终仍走现有桌面启动路径以带上自动代理。
+            status.Text = "中文已安装，正在带代理启动 Antigravity…";
+            await LaunchAsync(0);
+            status.Text = "中文 " + version + " 已安装。 " + status.Text;
+        }
+        else
+            status.Text = "已恢复 Antigravity 官方英文资源。";
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        // 等待汉化进程完成原子替换和校验，避免关闭窗口时提前释放操作锁。
+        if (changingLanguage && e.CloseReason == CloseReason.UserClosing)
+            e.Cancel = true;
+        base.OnFormClosing(e);
     }
 
     private async Task LaunchAsync(int index)
