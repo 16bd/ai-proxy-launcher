@@ -1,0 +1,6 @@
+# 编译结果和临时验证产物由本地重新生成。
+*.exe
+artifacts/
+bin/
+obj/
+AIProxyLauncher-Source.zip
