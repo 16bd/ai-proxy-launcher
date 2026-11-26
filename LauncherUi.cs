@@ -81,13 +81,18 @@ internal static class LauncherStyle
 
 internal sealed class LauncherForm : Form
 {
-    private string proxy;
+    private string detectedProxy;
     private readonly string[] programs = new string[Service.All.Length];
     private readonly ProbeResult[] results = new ProbeResult[Service.All.Length];
     private readonly Button[] nativeButtons = new Button[Service.All.Length];
     private readonly Label[] lines = new Label[Service.All.Length];
     private readonly Label status = LauncherStyle.Label("", 9);
-    private readonly Label proxyLine = LauncherStyle.Label("", 10);
+    private readonly TextBox proxyAddress = new TextBox
+    {
+        AccessibleName = "共享代理地址", Anchor = AnchorStyles.Left | AnchorStyles.Right,
+        Margin = Padding.Empty
+    };
+    private readonly Label proxyHint = LauncherStyle.Label("", 9);
     private readonly Button test = LauncherStyle.Button("测试连接");
     private readonly Button installChinese = LauncherStyle.Button("安装中文", width: 84);
     private readonly Button restoreEnglish = LauncherStyle.Button("恢复英文", width: 84);
@@ -104,8 +109,8 @@ internal sealed class LauncherForm : Form
         BackColor = SystemInformation.HighContrast ? SystemColors.Window : LauncherStyle.Surface;
         ForeColor = SystemColors.WindowText;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(655, 474);
-        MinimumSize = new Size(565, 493);
+        ClientSize = new Size(655, 500);
+        MinimumSize = new Size(565, 519);
         MaximizeBox = false;
 
         var page = new TableLayoutPanel
@@ -113,7 +118,7 @@ internal sealed class LauncherForm : Form
             Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 7, Padding = new Padding(24, 18, 24, 14)
         };
         page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        foreach (int height in new[] { 64, 74, 73, 73, 73, 34 })
+        foreach (int height in new[] { 64, 100, 73, 73, 73, 34 })
             page.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
         page.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         Controls.Add(page);
@@ -140,11 +145,30 @@ internal sealed class LauncherForm : Form
 
         var shared = LauncherStyle.Band();
         shared.BackColor = SystemInformation.HighContrast ? SystemColors.Window : LauncherStyle.AccentSurface;
-        shared.Controls.Add(LauncherStyle.Label("共享代理", 10, true), 0, 0);
-        shared.Controls.Add(proxyLine, 0, 1);
+        shared.RowCount = 3;
+        shared.RowStyles.Clear();
+        foreach (int height in new[] { 30, 40, 30 })
+            shared.RowStyles.Add(new RowStyle(SizeType.Percent, height));
+        shared.Controls.Add(LauncherStyle.Label("共享代理（留空时自动识别）", 10, true), 0, 0);
+        shared.Controls.Add(proxyAddress, 0, 1);
+        shared.Controls.Add(proxyHint, 0, 2);
+        proxyAddress.TextChanged += (sender, args) =>
+        {
+            // 地址变化后清除旧结果，程序回填时保留自动识别状态。
+            if (proxyAddress.Text != detectedProxy)
+            {
+                detectedProxy = null;
+                status.Text = "";
+            }
+            Array.Clear(results, 0, results.Length);
+            Render();
+            UpdateProxyHint();
+        };
+        proxyAddress.Leave += (sender, args) => UpdateProxyHint(true);
+        UpdateProxyHint();
         test.Click += async (sender, args) => await RunAsync(TestAsync);
         shared.Controls.Add(test, 1, 0);
-        shared.SetRowSpan(test, 2);
+        shared.SetRowSpan(test, 3);
         page.Controls.Add(shared, 0, 1);
 
         for (int i = 0; i < Service.All.Length; i++)
@@ -201,9 +225,8 @@ internal sealed class LauncherForm : Form
 
     private void Render()
     {
-        proxyLine.Text = proxy != null
-            ? proxy + "  ·  自动识别"
-            : busy ? "正在识别代理地址…" : "未找到可用的本地 HTTP 代理";
+        // 同一次测试、下载或启动期间固定输入地址，避免操作结果与显示地址不一致。
+        proxyAddress.ReadOnly = busy;
         test.Enabled = !busy;
         installChinese.Enabled = restoreEnglish.Enabled = !busy && programs[0] != null;
         for (int i = 0; i < nativeButtons.Length; i++)
@@ -244,16 +267,45 @@ internal sealed class LauncherForm : Form
         }
     }
 
-    private async Task<bool> ResolveProxyAsync()
+    private void UpdateProxyHint(bool validate = false)
     {
-        // 代理地址由当前的本地监听探测得到，旧版保存的手动配置不参与选择。
-        proxy = await Network.DetectAsync();
-        if (proxy == null)
-            status.Text = "请启动代理客户端并启用 HTTP 或混合端口，然后重新测试。";
-        else if (status.Text.StartsWith("请启动", StringComparison.Ordinal))
-            status.Text = "";
-        Render();
-        return proxy != null;
+        string input = proxyAddress.Text;
+        if (!string.IsNullOrWhiteSpace(input) && input == detectedProxy)
+            proxyHint.Text = "已自动识别，可修改地址。";
+        else if (validate && !string.IsNullOrWhiteSpace(input) && Network.Parse(input) == null)
+            proxyHint.Text = "地址格式有误，例如 127.0.0.1:7890";
+        else
+            proxyHint.Text = "填写 HTTP 或混合端口，例如 127.0.0.1:7890";
+    }
+
+    private async Task<string> ResolveProxyAsync(bool refresh = false)
+    {
+        string input = proxyAddress.Text;
+        // 手动地址直接交给当前操作，格式不合法时保留原输入供用户修正。
+        if (!string.IsNullOrWhiteSpace(input) && input != detectedProxy)
+        {
+            string manual = Network.Parse(input);
+            if (manual == null)
+            {
+                UpdateProxyHint(true);
+                status.Text = "请修正共享代理地址后重试。";
+            }
+            return manual;
+        }
+        if (refresh || string.IsNullOrEmpty(detectedProxy))
+        {
+            proxyHint.Text = "正在识别代理地址…";
+            string address = await Network.DetectAsync();
+            if (IsDisposed)
+                return null;
+            detectedProxy = address ?? "";
+            proxyAddress.Text = detectedProxy;
+            UpdateProxyHint();
+        }
+        if (!string.IsNullOrEmpty(detectedProxy))
+            return detectedProxy;
+        status.Text = "未自动识别到代理，请填写客户端的 HTTP 或混合端口。";
+        return null;
     }
 
     private async Task TestAsync()
@@ -261,9 +313,9 @@ internal sealed class LauncherForm : Form
         status.Text = "正在测试三个服务的 HTTPS 连通性…";
         Array.Clear(results, 0, results.Length);
         RefreshTargets();
-        if (!await ResolveProxyAsync())
+        string address = await ResolveProxyAsync(true);
+        if (address == null)
             return;
-        string address = proxy;
         ProbeResult[] checks = await Task.WhenAll(Service.All.Select(app => Task.Run(() => Network.Check(address, app))));
         Array.Copy(checks, results, checks.Length);
         int passed = checks.Count(result => result.Ok);
@@ -290,12 +342,13 @@ internal sealed class LauncherForm : Form
             status.Text = "没有找到此电脑的 Antigravity 汉化记录。";
             return;
         }
-        // 安装前重新识别代理，代理客户端切换端口时仍能查询版本并正确启动。
-        if ((install || !localization.HasRestorePackage) && !await ResolveProxyAsync())
+        // 需要联网时优先用手填地址。有缓存时允许离线恢复，也为缓存校验失败时保留下载地址。
+        bool needsProxy = install || !localization.HasRestorePackage;
+        string address = needsProxy ? await ResolveProxyAsync(true) : Network.Parse(proxyAddress.Text);
+        if (needsProxy && address == null)
             return;
         status.Text = "正在准备 Antigravity 汉化组件…";
         var progress = new Progress<string>(message => { if (!IsDisposed) status.Text = message; });
-        string address = proxy;
         changingLanguage = true;
         string version;
         try
@@ -308,7 +361,7 @@ internal sealed class LauncherForm : Form
         }
         if (install)
         {
-            // 上游组件只处理本地汉化，最终仍走现有桌面启动路径以带上自动代理。
+            // 上游组件只处理本地汉化，完成后沿用当前共享代理启动桌面版。
             status.Text = "中文已安装，正在带代理启动 Antigravity…";
             await LaunchAsync(0);
             status.Text = "中文 " + version + " 已安装。 " + status.Text;
@@ -328,7 +381,8 @@ internal sealed class LauncherForm : Form
     private async Task LaunchAsync(int index)
     {
         Service app = Service.All[index];
-        if (proxy == null && !await ResolveProxyAsync())
+        string address = await ResolveProxyAsync();
+        if (address == null)
             return;
         // 启动前重新定位已更新的程序，Store 刚更新时也使用当前安装路径。
         string exe = LaunchTarget.FindDesktop(app);
@@ -345,8 +399,8 @@ internal sealed class LauncherForm : Form
         }
         string package = LaunchTarget.GetPackageActivationId(exe);
         using (var launched = package == null
-            ? Process.Start(LaunchTarget.Desktop(app, exe, proxy))
-            : Process.GetProcessById(LaunchTarget.ActivatePackage(package, LaunchTarget.ProxyArguments(proxy))))
+            ? Process.Start(LaunchTarget.Desktop(app, exe, address))
+            : Process.GetProcessById(LaunchTarget.ActivatePackage(package, LaunchTarget.ProxyArguments(address))))
         {
             if (launched == null)
                 throw new InvalidOperationException("Windows 未能创建 " + app.Name + " 进程。");
@@ -358,6 +412,6 @@ internal sealed class LauncherForm : Form
                 return;
             }
         }
-        status.Text = "已发起 " + app.Name + " 桌面版启动  ·  " + proxy;
+        status.Text = "已发起 " + app.Name + " 桌面版启动  ·  " + address;
     }
 }
