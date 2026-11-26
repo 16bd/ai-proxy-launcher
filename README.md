@@ -19,6 +19,8 @@
 
 先退出 Antigravity，再点击「安装中文」。启动器通过当前共享代理查询[上游最新正式版](https://github.com/Ace2025001/antigravity-desktop-zhcn/releases/latest)。新版本从 GitHub 下载并按发布信息的 SHA-256 校验，已经缓存的同版本也会重新校验。汉化使用离线词库，关闭联网补译、对话标题翻译和后台更新。安装通过校验后，启动器通过同一代理打开 Antigravity。
 
+GitHub API 拒绝查询时，启动器会通过官方发布页确认已知版本仍是最新，并使用内置的 SHA-256 校验。下载被拒时，错误提示会显示失败的域名。
+
 退出 Antigravity 后可点击「恢复英文」。恢复会用安装时的汉化组件核对当前应用资源和原版备份。新版组件的结构不兼容时，启动器会停止，并保留已安装的汉化。
 
 汉化组件来自 [Antigravity Desktop ZHCN](https://github.com/Ace2025001/antigravity-desktop-zhcn)，采用 MIT 许可，版权和许可声明随原始汉化包保留。

@@ -14,11 +14,11 @@ using System.Web.Script.Serialization;
 internal sealed class AntigravityLocalization
 {
     private const string LatestUrl = "https://api.github.com/repos/Ace2025001/antigravity-desktop-zhcn/releases/latest";
-    private const string DownloadRoot = "https://github.com/Ace2025001/antigravity-desktop-zhcn/releases/download/";
+    private const string ReleaseRoot = "https://github.com/Ace2025001/antigravity-desktop-zhcn/releases/";
     private const string AssetName = "Antigravity-Windows+Mac.zip";
     private const int MetadataLimit = 1024 * 1024;
     private const long ArchiveLimit = 256L * 1024 * 1024;
-    // 旧的测试版未记录所用的包，只在恢复或迁移已验证的旧缓存时使用这一组摘要。
+    // 旧测试版的恢复依赖这一组摘要。API 拒绝查询时，也可在发布页确认此版本仍为最新后使用。
     private static readonly Package Legacy = new Package("v3.1.9",
         "sha256:20b4bd349e08a99da40836a7225025d14acbf2f10ee4e2cf867bb9761067e2be", 73615348);
     private const string PackageRoot = "antigravity汉化包/";
@@ -75,7 +75,7 @@ internal sealed class AntigravityLocalization
                 if (install)
                 {
                     progress.Report("正在检查上游最新正式版汉化包…");
-                    package = CheckLatest(proxy);
+                    package = CheckLatest(proxy, progress);
                 }
                 else
                     package = ReadInstalledPackage();
@@ -118,10 +118,40 @@ internal sealed class AntigravityLocalization
         catch (IOException error) { throw new InvalidOperationException("另一项 Antigravity 汉化操作正在进行。", error); }
     }
 
-    private static Package CheckLatest(string proxy)
+    private static Package CheckLatest(string proxy, IProgress<string> progress)
     {
         if (string.IsNullOrWhiteSpace(proxy))
             throw new InvalidOperationException("请先启动本地代理，再检查最新汉化包。");
+        try
+        {
+            return CheckLatestApi(proxy);
+        }
+        catch (WebException error)
+        {
+            using (var response = error.Response as HttpWebResponse)
+            {
+                int code = response == null ? 0 : (int)response.StatusCode;
+                if (code != 403 && code != 429)
+                    throw RequestError("查询汉化包版本", new Uri(LatestUrl), error, response);
+            }
+        }
+
+        // 仅在官方最新发布仍指向已核验的版本时回退，避免接口受限时误装旧包。
+        progress.Report("GitHub API 拒绝查询，正在通过官方发布页确认版本…");
+        var address = new Uri(ReleaseRoot + "latest");
+        using (var response = GetGitHubResponse(CreateRequest(address, proxy), "确认汉化包版本"))
+        {
+            string location = response.Headers[HttpResponseHeader.Location];
+            Uri target;
+            if (response.StatusCode != HttpStatusCode.Redirect || location == null ||
+                !Uri.TryCreate(address, location, out target) || target.AbsoluteUri != ReleaseRoot + "tag/" + Legacy.Tag)
+                throw new IOException("GitHub API 拒绝查询，且无法确认当前最新汉化包的校验信息。请切换代理节点后重试。");
+        }
+        return Legacy;
+    }
+
+    private static Package CheckLatestApi(string proxy)
+    {
         var request = CreateRequest(new Uri(LatestUrl), proxy);
         request.Accept = "application/vnd.github+json";
         request.Headers["X-GitHub-Api-Version"] = "2022-11-28";
@@ -196,10 +226,10 @@ internal sealed class AntigravityLocalization
 
     private static HttpWebResponse OpenAsset(Package package, string proxy)
     {
-        var address = new Uri(DownloadRoot + package.Tag + "/" + Uri.EscapeDataString(AssetName));
+        var address = new Uri(ReleaseRoot + "download/" + package.Tag + "/" + Uri.EscapeDataString(AssetName));
         for (int count = 0; count < 5; count++)
         {
-            var response = (HttpWebResponse)CreateRequest(address, proxy).GetResponse();
+            var response = GetGitHubResponse(CreateRequest(address, proxy), "下载汉化包");
             if (response.StatusCode == HttpStatusCode.OK)
                 return response;
             string location = response.Headers[HttpResponseHeader.Location];
@@ -215,6 +245,23 @@ internal sealed class AntigravityLocalization
         throw new IOException("汉化包下载重定向次数过多。");
     }
 
+    private static HttpWebResponse GetGitHubResponse(HttpWebRequest request, string stage)
+    {
+        try { return (HttpWebResponse)request.GetResponse(); }
+        catch (WebException error)
+        {
+            using (var response = error.Response as HttpWebResponse)
+                throw RequestError(stage, request.RequestUri, error, response);
+        }
+    }
+
+    private static IOException RequestError(string stage, Uri address, WebException error, HttpWebResponse response)
+    {
+        // 只显示失败阶段和域名，避免把 CDN 的临时签名链接写入提示。
+        string detail = response == null ? error.Status.ToString() : "HTTP " + (int)response.StatusCode;
+        return new IOException(stage + "失败（" + address.Host + "，" + detail + "）。请检查共享代理或切换代理节点后重试。", error);
+    }
+
     private static void DownloadPackage(string archive, string proxy, IProgress<string> progress, Package package)
     {
         if (proxy == null)
@@ -223,7 +270,7 @@ internal sealed class AntigravityLocalization
         string pending = archive + ".download";
         try
         {
-            progress.Report("正在通过自动识别的代理下载 " + package.Tag + " 汉化包…");
+            progress.Report("正在通过共享代理下载 " + package.Tag + " 汉化包…");
             using (var response = OpenAsset(package, proxy))
             using (Stream input = response.GetResponseStream())
             using (var output = new FileStream(pending, FileMode.Create, FileAccess.Write, FileShare.None))
