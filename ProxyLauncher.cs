@@ -258,9 +258,9 @@ internal static class LaunchTarget
         throw new InvalidOperationException("软件包清单中未登记该桌面应用的启动入口。");
     }
 
-    internal static int ActivatePackage(string appId, string arguments)
+    internal static void ActivatePackage(string appId, string arguments)
     {
-        // 通过 Windows 保留软件包身份，否则商店版运行时可能缺失。
+        // 通过 Windows 保留软件包身份，激活失败时用 HRESULT 报告系统错误。
         var activationType = Type.GetTypeFromCLSID(new Guid("45BA127D-10A8-46EA-8AB7-56EA9078943C"), true);
         var activation = (IApplicationActivationManager)Activator.CreateInstance(activationType);
         try
@@ -269,7 +269,6 @@ internal static class LaunchTarget
             int result = activation.ActivateApplication(appId, arguments, 2, out processId);
             if (result != 0)
                 throw new InvalidOperationException("Windows 激活桌面应用失败（0x" + result.ToString("X8") + "）。");
-            return processId;
         }
         finally
         {

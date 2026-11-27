@@ -398,18 +398,24 @@ internal sealed class LauncherForm : Form
             return;
         }
         string package = LaunchTarget.GetPackageActivationId(exe);
-        using (var launched = package == null
-            ? Process.Start(LaunchTarget.Desktop(app, exe, address))
-            : Process.GetProcessById(LaunchTarget.ActivatePackage(package, LaunchTarget.ProxyArguments(address))))
+        if (package != null)
         {
-            if (launched == null)
-                throw new InvalidOperationException("Windows 未能创建 " + app.Name + " 进程。");
-            // 安装包可能允许创建进程，但在初始化阶段立即退出。
-            bool exited = await Task.Run(() => launched.WaitForExit(1600));
-            if (exited && launched.ExitCode != 0)
+            // 商店版由 Windows 激活，返回的进程可能已交接，启动请求以系统激活结果为准。
+            LaunchTarget.ActivatePackage(package, LaunchTarget.ProxyArguments(address));
+        }
+        else
+        {
+            using (var launched = Process.Start(LaunchTarget.Desktop(app, exe, address)))
             {
-                status.Text = app.Name + " 桌面版启动失败（退出码 " + launched.ExitCode + "）。";
-                return;
+                if (launched == null)
+                    throw new InvalidOperationException("Windows 未能创建 " + app.Name + " 进程。");
+                // 独立安装版由启动器直接创建进程，可以检查初始化阶段的非零退出码。
+                bool exited = await Task.Run(() => launched.WaitForExit(1600));
+                if (exited && launched.ExitCode != 0)
+                {
+                    status.Text = app.Name + " 桌面版启动失败（退出码 " + launched.ExitCode + "）。";
+                    return;
+                }
             }
         }
         status.Text = "已发起 " + app.Name + " 桌面版启动  ·  " + address;
